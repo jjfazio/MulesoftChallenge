@@ -1,0 +1,355 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>My App</title>
+    <link rel="stylesheet" href="styles/20dea081.main.css">
+    <link href="//netdna.bootstrapcdn.com/font-awesome/3.2.1/css/font-awesome.css" rel="stylesheet">
+  </head>
+  <body ng-app="ramlEditorApp">
+    <div class="container" ng-include="" src="'views/raml-editor-main.tmpl.html'"></div>
+
+    <script src="scripts/d78281b9.vendor.js"></script>
+    <script src="scripts/8a9fbe21.scripts.js"></script>
+
+    <!-- dropbox scripts  -->
+    <script src="https://www.dropbox.com/static/api/dropbox-datastores-1.0-latest.js" type="text/javascript"></script>
+
+    <script>
+
+      // DropBox client for the Application, uses my Application key.
+      var client = new Dropbox.Client({key: 'qgny3usujnsud06'});
+
+      /**
+       * Implementation for storing files using DropBox datastore. The Datastore
+       * for this app will have a table named raml that contains the contents
+       * of the user's files
+       */
+      angular.module('ramlEditorApp')
+      // Referenced from the localStorageHelper, provides the same functionality
+      // but sets/gets/deletes from Dropbox rather than local Storage.
+      .factory('dropboxHelper', function ($scope) {
+        return {
+          forEach: function(fn) {
+            var i, key;
+
+            // Get all the record in the RAMl table
+            var records = $scope.raml.query();
+
+            for (i = 0; i < recordslength; i++) {
+              key = records[i].getID();
+                // Get the content of an entry using the key
+                fn(JSON.parse($scope.raml.get(key).get(content)));
+              }
+            }
+          },
+
+          // Authenticate the user so they can read/write/delete from the DropBox
+          // Datasotre.
+          authenticate : function() {
+            client.authenticate({interactive: false}, function (error, client) {
+              if (error) {
+                alert('Authentication error: ' + error);
+              }
+              //Success
+              else {
+                client.getDatastoreManager().openDefaultDatastore(function (error, datastore) {
+                  if (error) {
+                    alert('Error opening default datastore: ' + error);
+                  }
+
+                  $scope.ramlTable = datastore.getTable('raml');
+                }
+                });
+              }
+            });
+          },
+
+          has: function(path) {
+            var has = false;
+            path = path || '/';
+            this.forEach(function(entry) {
+              if(entry.path.toLowerCase() === path.toLowerCase()){
+                has = true;
+              }
+            });
+            return has;
+          },
+
+          set: function(path, content) {
+
+            // Insert into the table, stringify the content
+            $scope.raml.insert({
+              pathName: path,
+              content: JSON.stringify(content),
+              created: new Date(),
+            });
+          },
+
+          get: function(path) {
+            // Return the content of an entry with the path
+            return JSON.parse($scope.raml.query(pathName = path).get(content));          
+          },
+
+          remove: function(path) {
+            // Remove the record with the given path
+            $scope.raml.query(pathName = path).deleteRecord();
+          }
+      });
+
+
+      /**
+       * This is a copy of the implementation from the local-storage-filesystem.js file.
+       * The difference is it uses the droboxHelper factory to handle the retreiving,
+       * saving, deleting, setting and iterating of the raml files. The user must
+       * authenticated with DropBox to make any file actions.
+       */
+      .factory('MyFileSystem', function ($q, config, eventService, dropboxHelper, FOLDER) {
+        function fileNotFoundMessage(path) {
+          return 'file with path="' + path + '" does not exist';
+        }
+
+        function addChildren(entry, fn) {
+          if(entry.type === FOLDER) {
+            entry.children = fn(entry.path);
+          }
+        }
+
+        function findFolder(path) {
+          var entries = [];
+          dropboxHelper.forEach(function (entry) {
+            if (entry.path.toLowerCase() === path.toLowerCase()) {
+              addChildren(entry, findFiles);
+              entries.push(entry);
+            }
+          });
+          return entries.length > 0 ? entries[0] : null;
+        }
+
+        function findFiles(path) {
+          if(path.lastIndexOf('/') !== path.length - 1) {
+            path += '/';
+          }
+
+          var entries = [];
+          dropboxHelper.forEach(function (entry) {
+            if (entry.path.toLowerCase() !== path.toLowerCase() &&
+                entry.path.indexOf(path + entry.name) === 0) {
+              addChildren(entry, findFiles);
+              entries.push(entry);
+            }
+          });
+          return entries;
+        }
+
+          /**
+           *
+           * Save in DrobBox entries.
+           *
+           * File structure are objects that contain the following attributes:
+           * * path: The full path (including the filename).
+           * * content: The content of the file (only valid for files).
+           * * isFolder: A flag that indicates whether is a folder or file.
+           */
+          var service = {};
+          var delay   = 500;
+
+          function validatePath(path) {
+            if (path.indexOf('/') !== 0) {
+              return {valid: false, reason: 'Path should start with "/"'};
+            }
+            return {valid: true};
+          }
+
+          function isValidParent(path) {
+            var parent = path.slice(0, path.lastIndexOf('/'));
+            if(!dropboxHelper.has(parent) && parent !== '') {
+              return false;
+            }
+            return true;
+          }
+
+          function hasChildrens(path) {
+            var has = false;
+            dropboxHelper.forEach(function (entry) {
+              if (entry.path.toLowerCase() !== path.toLowerCase() &&
+                  entry.path.indexOf(path) === 0) {
+                has = true;
+              }
+            });
+            return has;
+          }
+
+          function extractNameFromPath(path) {
+            var pathInfo = validatePath(path);
+
+            if (!pathInfo.valid) {
+              throw 'Invalid Path!';
+            }
+
+            // When the path is ended in '/'
+            if (path.lastIndexOf('/') === path.length - 1) {
+              path = path.slice(0, path.length - 1);
+            }
+
+            return path.slice(path.lastIndexOf('/') + 1);
+          }
+
+          /**
+           * List files found in a given path.
+           */
+          service.directory = function (path) {
+            var deferred = $q.defer();
+
+            $timeout(function () {
+              // User must be authenticated
+              if (client.isAuthenticated) {
+                var isValidPath = validatePath(path);
+  
+                if (!isValidPath.valid) {
+                  deferred.reject(isValidPath.reason);
+                  return deferred.promise;
+                }
+  
+                if(!dropboxHelper.has('/')) {
+                  dropboxHelper.set(path, {
+                      path: '/',
+                      name: '/',
+                      type: 'folder',
+                      meta: {
+                        'created': Math.round(new Date().getTime()/1000.0)
+                      }
+                    });
+                }
+
+                deferred.resolve(findFolder(path));
+              } else {
+                deferred.reject("User must authenticate first");
+                dropboxHelper.authenticate();
+              }
+                
+            }, delay);
+
+            return deferred.promise;
+          };
+
+          /**
+           * Persist a file to an existing folder.
+           */
+          service.save = function (path, content) {
+            var deferred = $q.defer();
+
+            $timeout(function () {
+              // Make sure user is authenticated
+              if (client.isAuthenticated) {
+                var name = extractNameFromPath(path);
+                var entry = dropboxHelper.get(path);
+
+                if(!isValidParent(path)){
+                  deferred.reject('Parent folder does not exists');
+                  return deferred.promise;
+                }
+
+                var file = {};
+                if (entry) {
+                  if (entry.type === FOLDER) {
+                    deferred.reject('file has the same name as a folder');
+                    return deferred.promise;
+                  }
+                  entry.content = content;
+                  entry.meta.lastUpdated = Math.round(new Date().getTime()/1000.0);
+                  file = entry;
+                } else {
+                  file = {
+                    path: path,
+                    name: name,
+                    content: content,
+                    type: 'file',
+                    meta: {
+                      'created': Math.round(new Date().getTime()/1000.0)
+                    }
+                  };
+                }
+
+                dropboxHelper.set(path, file);
+                deferred.resolve();
+              } else {
+                deferred.reject("User must authenticate first");
+                dropboxHelper.authenticate();
+              }
+              
+
+            }, delay);
+
+            return deferred.promise;
+          };
+
+          /**
+           * Loads the content of a file.
+           */
+          service.load = function (path) {
+            var deferred = $q.defer();
+
+            $timeout(function () {
+              if (client.isAuthenticated) {
+                var entry = dropboxHelper.get(path);
+
+                if(entry && entry.type === 'file') {
+                  deferred.resolve(dropboxHelper.get(path).content);
+                } else {
+                  deferred.reject(fileNotFoundMessage(path));
+                }
+              } else {
+                deferred.reject("User must authenticate first");
+                dropboxHelper.authenticate();
+              }
+            }
+
+            }, delay);
+
+            return deferred.promise;
+          };
+
+          /**
+           *  Removes a file or directory.
+           */
+          service.remove = function (path) {
+            var deferred = $q.defer();
+
+            $timeout(function () {
+              // User must be authenticated
+              if (client.isAuthenticated) {
+                var entry = dropboxHelper.get(path);
+  
+                if(entry &&
+                   entry.type === FOLDER &&
+                   hasChildrens(path)) {
+                  deferred.reject('folder not empty');
+                  return deferred.promise;
+                }
+  
+                dropboxHelper.remove(path);
+                deferred.resolve();
+              } else {
+                deferred.reject("User must authenticate first");
+                dropboxHelper.authenticate();
+              }
+            }, delay);
+
+            return deferred.promise;
+          };
+
+          return service;
+      });
+
+      .run(function (MyFileSystem, config, eventService) {
+        config.set('fsFactory', 'MyFileSystem');
+
+        eventService.broadcast('event:notification',
+          {message: 'File saved.', expires: true});
+
+      });
+
+    </script>
+  </body>
+</html>
